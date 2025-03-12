@@ -56,24 +56,28 @@ class SoloTrainer():
 class FLTrainer():
     def __init__(self, args):
         self.verbose = args.verbose
-        if args.fl_momentum == 'local':
-            self.init_actors, self.train_one_round = local_momentum_classes_and_functions()
-        elif args.fl_momentum == 'global':
-            self.init_actors, self.train_one_round = global_momentum_classes_and_functions()
-        else:
-            raise "Wrong FL momentum string"
         self.num_clients = args.num_clients
         self.num_byz = args.num_byz
-        self.n_benign_clients = args.num_clients - args.num_byz
+        self.device = args.device
         model = init_model(args)
-        trainset, testset = dataset(args.dataset, args.download_dataset)
+        trainset, testset, self.num_classes = dataset(args.dataset, args.download_dataset)
         trainsets = IIDPartitioner(args.num_clients, args.batch_size).split_dataset(trainset)
         optimizer = torch.optim.SGD(model.parameters(), **(args.optimizer or {}))
 
-        self.server, self.clients = self.init_actors(args, model, optimizer, trainsets, testset)
-        self.attack_fn = globals()[args.attack['type']](self, **args.attack['params']) \
-            if args.attack['type'] != None else None
+        self.attack_fn = globals()[args.attack['type']](self, **args.attack['params']) if args.attack['type'] != None else None
+        self.n_clients_to_train = self.num_clients if args.attack['type'] != None and args.attack['type'] in ['SignFlip', 'LabelFlip'] else self.num_clients - self.num_byz
+
         self.agg_fn = globals()[args.aggregator['type']](self, **args.aggregator['params'])
+
+        if args.fl_momentum == 'local':
+            self.server, self.clients = init_actors_local_momentum (args, model, optimizer, trainsets, testset, self.attack_fn)
+            self.train_one_round = train_one_round_local_momentum
+        elif args.fl_momentum == 'global':
+            self.server, self.clients = init_actors_global_momentum(args, model, optimizer, trainsets, testset, self.attack_fn)
+            self.train_one_round = train_one_round_local_momentum
+        else:
+            raise "Wrong FL momentum string"
+        
         self.total_epochs = args.total_epochs
     
     def train(self):
@@ -101,9 +105,9 @@ if __name__ == '__main__':
             self.dataset = 'CIFAR10'
             self.batch_size = 32
             self.num_clients = 20
-            self.num_byz = 0
-            self.aggregator = {'type': 'Avg', 'params': {}}
-            self.attack = {'type': None, 'params': {}}
+            self.num_byz = 8
+            self.aggregator = {'type': 'Mean', 'params': {}}
+            self.attack = {'type': 'LIE', 'params': { 'z_max': 1.0}}
             self.model = model
             if self.model.startswith('snn'):
                 self.optimizer = {
@@ -112,9 +116,9 @@ if __name__ == '__main__':
                     'weight_decay': 0.0001,
                 }
                 self.snn_hyperparams = {
-                    'threshold': 1.0,
-                    'leak': 0.99,
-                    'timesteps': 9
+                    'threshold': 1.5,
+                    'leak': 0.95,
+                    'timesteps': 25
                 }
             elif self.model.startswith('ann'):
                 self.model = 'ann_vgg9'
@@ -129,4 +133,6 @@ if __name__ == '__main__':
                 return f"{self.model, self.fl_momentum, self.optimizer}, {self.num_clients}:{self.num_byz}"
             elif self.model.startswith('snn'):
                 return f"{self.model, self.fl_momentum, self.optimizer}, {self.num_clients}:{self.num_byz}, {self.snn_hyperparams}"
+            
+    FLTrainer(Args('ann_vgg9')).train()
     

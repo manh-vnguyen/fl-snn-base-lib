@@ -12,7 +12,7 @@ def dataset(name, download=True):
         ])
         trainset = datasets.CIFAR10(root='/tmp/data', train=True, download=download, transform=transform)
         testset = datasets.CIFAR10(root='/tmp/data', train=False, download=download, transform=transform)
-        return trainset, testset
+        return trainset, testset, 10
     elif name == 'MNIST':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -20,6 +20,7 @@ def dataset(name, download=True):
         ])
         trainset = datasets.MNIST(root='/tmp/data', train=True, download=download, transform=transform)
         testset = datasets.MNIST(root='/tmp/data', train=False, download=download, transform=transform)
+        return trainset, testset, 10
     elif name == 'CIFAR100':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -27,6 +28,7 @@ def dataset(name, download=True):
         ])
         trainset = datasets.CIFAR100(root='/tmp/data', train=True, download=download, transform=transform)
         testset = datasets.CIFAR100(root='/tmp/data', train=False, download=download, transform=transform)
+        return trainset, testset, 100
     elif name == 'FashionMNIST':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -34,8 +36,7 @@ def dataset(name, download=True):
         ])
         trainset = datasets.FashionMNIST(root='/tmp/data', train=True, download=download, transform=transform)
         testset = datasets.FashionMNIST(root='/tmp/data', train=False, download=download, transform=transform)
-    
-    return trainset, testset
+        return trainset, testset, 10
 
 class IIDPartitioner():
     def __init__(self, num_clients, batch_size):
