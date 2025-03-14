@@ -356,6 +356,14 @@ class Fang():
 
         return lambda_value * est_direction
     
+class Mimic():
+    def __init__(self, fl):
+        pass
+        
+    def __call__(self, b_updates):
+        return random.choice(b_updates)
+        
+    
 class LabelFlip():
     def __init__(self, fl):
         self.num_classes = fl.num_classes
