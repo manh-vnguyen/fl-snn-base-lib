@@ -71,8 +71,8 @@ class QuadraticSurr(torch.autograd.Function):
         x = input - threshold
         grad_input = torch.zeros_like(input)
         mask = torch.abs(x) <= width
-        grad_input[mask] = grad_output * dampen * (1 - (x/width)**2)
-        return grad_input, None, None
+        grad_input[mask] = dampen * (1 - (x[mask]/width)**2)
+        return grad_output * grad_input, None, None
     
 class RectangleSurr(torch.autograd.Function):
     @staticmethod
@@ -91,5 +91,5 @@ class RectangleSurr(torch.autograd.Function):
         x = input - threshold
         grad_input = torch.zeros_like(input)
         mask = torch.abs(x) <= width/2
-        grad_input[mask] = grad_output * dampen / width
-        return grad_input, None, None
+        grad_input[mask] =  dampen / width
+        return grad_output * grad_input, None, None

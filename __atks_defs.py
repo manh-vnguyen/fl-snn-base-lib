@@ -8,35 +8,18 @@ import random
 ### AGGREGATORS
 class Mean():
     def __init__(self, fl):
-        pass
-    def __call__(self, grads):
-        return torch.stack(grads).mean(dim=0)
+        self.device = fl.device
 
-class TopK():
-    def __init__(self, fl, kappa = 0.1):
-        self.kappa = kappa
-        self.K = None
-        
-        
-    def __call__(self, grads):
-        if self.K is None:
-            self.K = int(self.kappa * len(grads[0]))
-        count = torch.zeros_like(grads[0])
-        total = torch.zeros_like(grads[0])
-        for input_tensor in grads:
-            threshold = torch.topk(torch.abs(input_tensor), k=self.K)[0][-1]
-            mask = torch.abs(input_tensor) >= threshold
-            total += input_tensor * mask
-            count += mask
-        return total / count.clamp(min=1)
-        
+    def __call__(self, updates):
+        return torch.stack(updates).mean(dim=0)
+
 class DnC():
-    def __init__(self, fl, n_iters=10, sub_dim=1000, fliter_frac=1.0):
+    def __init__(self, fl, n_iters=10, sub_dim=10000, fliter_frac=1.0):
         self.n_iters = n_iters
         self.sub_dim = sub_dim
         self.fliter_frac = fliter_frac
         self.num_byz = fl.num_byz
-
+        self.attack_fn = fl.attack_fn
 
     def __call__(self, updates):
         updates = torch.stack(updates, dim=0)
@@ -45,19 +28,22 @@ class DnC():
         b_ids = []
         for i in range(self.n_iters):
             indices = torch.randint(0, d, (self.sub_dim,)).unique()
-            # indices = torch.randperm(d)[: sub_dim] this line is too inefficient
+            # indices = torch.randperm(d)[: self.sub_dim] # this line is too inefficient
             sub_updates = updates[:, indices]
             mu = sub_updates.mean(dim=0)
             centered_update = sub_updates - mu
-            v = torch.linalg.svd(centered_update, full_matrices=False)[2][0, :]
-            s = np.array(
-                [(torch.dot(update - mu, v) ** 2).item() for update in sub_updates]
-            )
+            try:
+                v = torch.linalg.svd(centered_update, full_matrices=False, driver='gesvd')[2][0, :]
+                s = np.array(
+                    [(torch.dot(update - mu, v) ** 2).item() for update in sub_updates]
+                )
 
-            good = s.argsort()[
-                : len(updates) - int(self.fliter_frac * self.num_byz)
-            ]
-            b_ids.append(good)
+                good = s.argsort()[
+                    : len(updates) - int(self.fliter_frac * self.num_byz)
+                ]
+                b_ids.append(good)
+            except:
+                print(f"Failed SVD {self.attack_fn}")
 
         intersection_set = set(b_ids[0])
 
@@ -65,7 +51,11 @@ class DnC():
             intersection_set.intersection_update(lst)
 
         b_ids = list(intersection_set)
-        agg_grad = updates[b_ids, :].mean(dim=0)
+        if len(b_ids) > 0:
+            agg_grad = updates[b_ids, :].mean(dim=0)
+        else:
+            print(f"Failed DnC {self.attack_fn}")
+            agg_grad = random.choice(updates)
         return agg_grad
 
 class Krum():
@@ -96,34 +86,12 @@ class Krum():
         else:
             return max_score_index
 
-class Median():
-    def __init__(self, fl):
-        pass
-
-    def __call__(self, updates):
-        return torch.median(torch.stack(updates), dim=0).values
-    
-class TrimmedMean():
-    def __init__(self, fl, filter_frac=0.1):
-        self.filter_frac = filter_frac
-
-    def __call__(self, updates):
-        updates = torch.stack(updates)
-        num_excluded = int(self.filter_frac * len(updates))
-        sorted_updates, _ = torch.sort(updates, dim=0)
-        smallest_excluded = sorted_updates[:num_excluded]
-        biggest_excluded = sorted_updates[-num_excluded:]
-        
-        weights = updates.sum(dim=0) - smallest_excluded.sum(dim=0) - biggest_excluded.sum(dim=0)
-        weights /= (len(updates) - 2 * num_excluded)
-        
-        return weights
-
 class RFA:
     def __init__(self, fl, num_iters=3, epsilon=1.0e-6, tol=1.0e-5):
         self.num_iters = num_iters  # Maximum number of iterations
         self.epsilon = epsilon  # Avoid division by zero
         self.tol = tol  # Convergence threshold
+        self.device = fl.device
 
     def __call__(self, updates):
         updates = torch.stack(updates)
@@ -131,11 +99,8 @@ class RFA:
         v = torch.mean(updates, dim=0)
 
         for _ in range(self.num_iters):
-            differences = updates - v
-            norms = torch.norm(differences, p=2, dim=1)
-
             # Compute weights with safeguard against division by zero
-            betas = 1.0 / torch.maximum(norms, torch.tensor(self.epsilon))
+            betas = 1.0 / torch.maximum(torch.norm(updates - v, p=2, dim=1), torch.tensor(self.epsilon))
 
             # Compute new estimate of v
             v_new = torch.sum(betas[:, None] * updates, dim=0) / betas.sum()
@@ -199,11 +164,11 @@ class SignGuard():
         
         # 2. extract positive, negative, and zero sign statistics
         randomized_weights = updates[:, idx:(idx + num_selected)]
-        sign_grads = torch.sign(randomized_weights)
+        updates = torch.sign(randomized_weights)
         sign_type = {"pos": 1, "zero": 0, "neg": -1}
 
         def sign_feat(sign_type):
-            sign_f = (sign_grads == sign_type).sum(dim=1, dtype=torch.float32) / num_selected
+            sign_f = (updates == sign_type).sum(dim=1, dtype=torch.float32) / num_selected
             return sign_f / (sign_f.max() + 1e-8)
             
         num_clients = updates.shape[0]
@@ -246,10 +211,10 @@ class SignGuard():
         benign_idx = list(set(S1_benign_idx).intersection(S2_benign_idx))
 
         # 3. clip the benign gradients by median of norms
-        grads_clipped_norm = torch.clamp(
+        updates_clipped_norm = torch.clamp(
             client_norms[benign_idx], min=0, max=median_norm)
         benign_clipped = (
-            updates[benign_idx] / client_norms[benign_idx].reshape(-1, 1)) * grads_clipped_norm.reshape(-1, 1)
+            updates[benign_idx] / client_norms[benign_idx].reshape(-1, 1)) * updates_clipped_norm.reshape(-1, 1)
 
         return benign_clipped.mean(dim=0)
 
@@ -261,6 +226,7 @@ class NormClipping:
         if self.weakDP:
             self.noise_mean = noise_mean
             self.noise_std = noise_std
+        self.device = fl.device
 
     def __call__(self, updates):
         updates = torch.stack(updates)
@@ -274,15 +240,6 @@ class NormClipping:
         return updates.mean(dim=0)
 
 ### ATTACKS
-class LIE():
-    def __init__(self, fl, z_max = 1.5):
-        self.z_max = z_max
-    def __call__(self, b_updates):
-        b_updates = torch.stack(b_updates)
-        mu = b_updates.mean(dim=0)
-        std = b_updates.std(dim=0)
-        return mu - std * self.z_max
-
 class IPM():
     def __init__(self, fl, scale = 0.1):
         self.scale = scale
@@ -309,29 +266,6 @@ class MinMax():
                 h = z
 
         return mu - z * sig
-    
-class MinSum():
-    def __init__(self, fl):
-        pass
-
-    def __call__(self, b_updates):
-        b_updates = torch.stack(b_updates)
-        mu = b_updates.mean(dim=0)
-        sig = b_updates.std(dim=0)
-        threshold = torch.cdist(b_updates, b_updates, p=2).sum(dim=0).max()
-
-        l, h = 0, 5
-        while abs(h - l) > 0.01:
-            z = (l + h) / 2
-            m_grad = torch.stack([mu - z * sig])
-            loss = torch.cdist(m_grad, b_updates, p=2).sum()
-            if loss < threshold:
-                l = z
-            else:
-                h = z
-
-        return mu - z * sig
-    
 class Fang():
     def __init__(self, fl):
         self.num_clients = fl.num_clients
@@ -382,18 +316,3 @@ class GaussRandom():
         
     def __call__(self, noise_shape):
         return torch.normal(0, self.std, size=noise_shape).to(self.device)
-
-if __name__ == '__main__':
-    torch.manual_seed(0)
-    updates = [torch.randn(30) for _ in range(5)]  # Example updates (5 clients, 10-dimensional)
-    print(torch.stack(updates).sum())
-    
-    print('SignGuard', SignGuard(None)(updates))
-    print('NormClipping', NormClipping(None)(updates))
-    print('CenterClipping', CenterClipping(None)(updates))
-    print('RFA', RFA(None)(updates))
-    print('Median', Median(None)(updates))
-    print('TrimmedMean', TrimmedMean(None)(updates))
-    print('Mean', Mean(None)(updates))
-    print('TopK', TopK(None)(updates))
-    

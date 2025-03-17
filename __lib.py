@@ -69,10 +69,7 @@ class FLTrainer():
 
         self.agg_fn = globals()[args.aggregator['type']](self, **args.aggregator['params'])
 
-        if args.fl_momentum == 'local':
-            self.server, self.clients = init_actors_local_momentum(args, model, optimizer, trainsets, testset, self.attack_fn)
-            self.train_one_round = train_one_round_local_momentum
-        elif args.fl_momentum == 'global':
+        if args.fl_momentum == 'global':
             self.server, self.clients = init_actors_global_momentum(args, model, optimizer, trainsets, testset, self.attack_fn)
             self.train_one_round = train_one_round_global_momentum
         else:

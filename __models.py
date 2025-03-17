@@ -1,23 +1,6 @@
 import torch
 from torch import nn
 import __surr_grad as surr_lib
-class ANN_MNIST(nn.Module):
-    def __init__(self):
-        super(ANN_MNIST, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.fc1 = nn.Linear(64 * 7 * 7, 512)
-        self.fc2 = nn.Linear(512, 10)
-
-    def forward(self, x):
-        x = torch.relu(self.conv1(x))
-        x = torch.max_pool2d(x, 2)
-        x = torch.relu(self.conv2(x))
-        x = torch.max_pool2d(x, 2)
-        x = x.view(-1, 64 * 7 * 7)
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
 
 class ANN_VGG(nn.Module):
     def __init__(self, labels=10, kernel_size=3, dropout=0.2):
@@ -67,13 +50,17 @@ def PoissonGen(inp, rescale_fac=2.0):
     return torch.mul(torch.le(rand_inp * rescale_fac, torch.abs(inp)).float(), torch.sign(inp))
 
 class SNN_VGG(nn.Module):
-    def __init__(self, img_size=32,  num_cls=10, surrogate='TriangleSurr', threshold=1.0, timesteps=25, leak=0.95, device=torch.device('cuda:0')):
+    def __init__(self, img_size=32,  num_cls=10, 
+                 surrogate={'type': 'TriangleSurr', 'params': {}}, 
+                 threshold=1.0, timesteps=25, leak=0.95, 
+                 device=torch.device('cuda:0')):
         super(SNN_VGG, self).__init__()
         self.device = device
         self.img_size = img_size
         self.num_cls = num_cls
         self.timesteps = timesteps
-        self.spike_fn = getattr(surr_lib, surrogate).apply
+        self.spike_fn = getattr(surr_lib, surrogate['type']).apply
+        self.surr_params = surrogate['params']
         self.leak = leak
         self.batch_num = self.timesteps
         self.threshold = threshold
@@ -143,7 +130,7 @@ class SNN_VGG(nn.Module):
 
             for i in range(len(self.conv_list)):
                 mem_conv_list[i] = self.leak * mem_conv_list[i] + self.bntt_list[i][t](self.conv_list[i](out_prev))
-                out = self.spike_fn(mem_conv_list[i], self.threshold)
+                out = self.spike_fn(mem_conv_list[i], self.threshold, **self.surr_params)
                 mem_conv_list[i] = mem_conv_list[i] - out * self.threshold
                 out_prev = out.clone()
 
@@ -154,7 +141,7 @@ class SNN_VGG(nn.Module):
             out_prev = out_prev.reshape(batch_size, -1)
 
             mem_fc1 = self.leak * mem_fc1 + self.bntt_fc[t](self.fc1(out_prev))
-            out = self.spike_fn(mem_fc1, self.threshold)
+            out = self.spike_fn(mem_fc1, self.threshold, **self.surr_params)
             mem_fc1 = mem_fc1 - out * self.threshold
             out_prev = out.clone()
 
@@ -176,12 +163,13 @@ class ANN_FC(nn.Module):
         return x
 
 class SNN_FC(nn.Module):
-    def __init__(self, surrogate='TriangleSurr', threshold=1.0, timesteps=8, leak=0.95, device=torch.device('cuda:5')):
+    def __init__(self, surrogate={'type': 'TriangleSurr', 'params': {}}, threshold=1.0, timesteps=8, leak=0.95, device=torch.device('cuda:5')):
         super(SNN_FC, self).__init__()
         self.device = device
         self.num_cls = 10
         self.timesteps = timesteps
-        self.spike_fn = getattr(surr_lib, surrogate).apply
+        self.spike_fn = getattr(surr_lib, surrogate['type']).apply
+        self.surr_params = surrogate['params']
         self.leak = leak
         self.threshold = threshold
 
@@ -206,7 +194,7 @@ class SNN_FC(nn.Module):
             spike = PoissonGen(inp).reshape(batch_size, -1)
 
             mem_fc1 = self.leak * mem_fc1 + self.fc1(spike)
-            out = self.spike_fn(mem_fc1, self.threshold)
+            out = self.spike_fn(mem_fc1, self.threshold, **self.surr_params)
             mem_fc1 = mem_fc1 - out * self.threshold
             
             spike = out.clone()
