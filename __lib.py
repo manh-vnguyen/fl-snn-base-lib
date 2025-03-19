@@ -59,8 +59,9 @@ class FLTrainer():
         self.num_clients = args.num_clients
         self.num_byz = args.num_byz
         self.device = args.device
+        trainset, testset, self.num_classes = dataset(args.dataset, args.download_dataset, args.num_exps)
+        args.num_classes = self.num_classes
         model = init_model(args)
-        trainset, testset, self.num_classes = dataset(args.dataset, args.download_dataset)
         trainsets = IIDPartitioner(args.num_clients, args.batch_size).split_dataset(trainset)
         optimizer = torch.optim.SGD(model.parameters(), **(args.optimizer or {}))
 

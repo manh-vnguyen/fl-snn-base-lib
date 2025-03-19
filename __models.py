@@ -3,7 +3,7 @@ from torch import nn
 import __surr_grad as surr_lib
 
 class ANN_VGG(nn.Module):
-    def __init__(self, labels=10, kernel_size=3, dropout=0.2):
+    def __init__(self, num_cls=10, kernel_size=3, dropout=0.2):
         super(ANN_VGG, self).__init__()
         
         self.kernel_size    = kernel_size
@@ -11,13 +11,13 @@ class ANN_VGG(nn.Module):
         self.features       = self._make_layers()
 
         self.classifier = nn.Sequential(
-            nn.Linear(256*2*2, 4096, bias=False),
+            nn.Linear(256*2*2, 1024, bias=False),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, 4096, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, labels, bias=False)
+            nn.Dropout(0.2),
+            # nn.Linear(1024, 1024, bias=False),
+            # nn.ReLU(inplace=True),
+            # nn.Dropout(0.5),
+            nn.Linear(1024, num_cls, bias=False)
         )
         
 
@@ -208,12 +208,12 @@ class SNN_FC(nn.Module):
 def init_model(args):
     if args.model == 'snn_vgg9':
         return SNN_VGG(img_size=32, 
-                    num_cls=10,
+                    num_cls=args.num_classes,
                     device=args.device, 
                     **args.snn_hyperparams).to(args.device)
     
     if args.model == 'ann_vgg9':
-        return ANN_VGG().to(args.device)
+        return ANN_VGG(num_cls=args.num_classes).to(args.device)
 
     if args.model == 'ann_fc':
         return ANN_FC().to(args.device)

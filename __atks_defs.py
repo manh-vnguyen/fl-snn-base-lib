@@ -22,7 +22,7 @@ class DnC():
         self.attack_fn = fl.attack_fn
 
     def __call__(self, updates):
-        updates = torch.stack(updates, dim=0)
+        updates = torch.stack(updates)
         d = len(updates[0])
 
         b_ids = []
@@ -55,7 +55,7 @@ class DnC():
             agg_grad = updates[b_ids, :].mean(dim=0)
         else:
             print(f"Failed DnC {self.attack_fn}")
-            agg_grad = random.choice(updates)
+            agg_grad = updates.mean(dim=0)
         return agg_grad
 
 class Krum():

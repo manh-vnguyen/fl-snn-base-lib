@@ -68,7 +68,10 @@ def init_actors_global_momentum(args, model, optimizer, trainsets, testset, atta
     server = ServerGlobalMomentum(model, optimizer, testset, args.batch_size, args.device)
     clients = []
     for i in range(args.num_clients):
-        clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, attack_fn))
+        if i < args.num_clients - args.num_byz:
+            clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, None))
+        else:
+            clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, attack_fn))
     return server, clients
 
 def train_one_round_global_momentum(self):
