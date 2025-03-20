@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import time
+import pickle
 
 from __datasets import *
 from __models import *
@@ -54,43 +55,81 @@ class SoloTrainer():
 
 ### Federated Learning
 class FLTrainer():
-    def __init__(self, args):
-        self.verbose = args.verbose
-        self.num_clients = args.num_clients
-        self.num_byz = args.num_byz
-        self.device = args.device
-        trainset, testset, self.num_classes = dataset(args.dataset, args.download_dataset, args.num_exps)
-        args.num_classes = self.num_classes
-        model = init_model(args)
-        trainsets = IIDPartitioner(args.num_clients, args.batch_size).split_dataset(trainset)
-        optimizer = torch.optim.SGD(model.parameters(), **(args.optimizer or {}))
+    def __init__(self, exp=None, exp_path=None):
+        assert exp_path != None ^ exp != None, "Exactly one variable should be input (exp, exp_path)"
+        if exp_path:
+            exp = pickle.load(open(exp_path, 'rb'))
+        self.verbose = exp.verbose
+        self.num_clients = exp.num_clients
+        self.num_byz = exp.num_byz
+        self.device = exp.device
+        self.total_epochs = exp.total_epochs
+        trainset, testset, self.num_classes = dataset(exp.dataset, exp.download_dataset)
+        
+        if getattr(exp, 'model_path') is None:
+            exp.model_path = f'{exp.run_path}/model_{exp.exp_num}'
+        if getattr(exp, 'exp_path') is None:
+            exp.exp_path = f'{exp.run_path}/exp_{exp.exp_num}'
+        if getattr(exp, 'seed') is None:
+            exp.seed = random.randint(0, 1e9)
+        shuff_gen = torch.Generator().manual_seed(exp.seed)
 
-        self.attack_fn = globals()[args.attack['type']](self, **args.attack['params']) if args.attack['type'] != None else None
-        self.n_clients_to_train = self.num_clients if args.attack['type'] != None and args.attack['type'] in ['SignFlip', 'LabelFlip'] else self.num_clients - self.num_byz
+        trainsets = IIDPartitioner(exp.num_clients, exp.batch_size).split_dataset(trainset, shuff_gen=shuff_gen)
+        optimizer = torch.optim.SGD(model.parameters(), **(exp.optimizer or {}))
 
-        self.agg_fn = globals()[args.aggregator['type']](self, **args.aggregator['params'])
+        self.attack_fn = globals()[exp.attack['type']](self, **exp.attack['params']) if exp.attack['type'] != None else None
+        self.n_clients_to_train = self.num_clients if exp.attack['type'] != None and exp.attack['type'] in ['SignFlip', 'LabelFlip'] else self.num_clients - self.num_byz
 
-        if args.fl_momentum == 'global':
-            self.server, self.clients = init_actors_global_momentum(args, model, optimizer, trainsets, testset, self.attack_fn)
+        self.agg_fn = globals()[exp.aggregator['type']](self, **exp.aggregator['params'])
+
+        if getattr(exp, 'checkpointed_epoch') is None:
+            exp.checkpointed_epoch = -1
+            model = init_model(exp, self.num_classes)
+            exp.train_losses = []
+            exp.test_accs = []
+            self.epoch = self.exp.checkpointed_epoch + 1
+        else:
+            torch.load(exp.model_path)
+
+        if exp.fl_momentum == 'global':
+            self.server, self.clients = init_actors_global_momentum(exp, model, optimizer, trainsets, testset, self.attack_fn, shuff_gen, exp.checkpointed_epoch)
             self.train_one_round = train_one_round_global_momentum
         else:
             raise "Wrong FL momentum string"
         
-        self.total_epochs = args.total_epochs
+        self.exp = exp
+    
+    def test(self):
+        return self.server.test()
+
+    def checkpoint(self, train_losses, test_accs):
+        self.exp.train_losses += train_losses
+        self.exp.test_accs += test_accs
+        torch.save(self.server.model, self.exp.model_path)
+        pickle.dump(self.exp, open(self.exp.exp_path, 'wb'))
     
     def train(self):
-        train_losses = []
-        for r in range(self.total_epochs):
+        train_losses, test_accs = [], []
+        while self.epoch < self.total_epochs:
             if self.verbose:
                 start_time = time.time()
             train_loss = self.train_one_round(self)
-            if self.verbose:
-                print(f"Round: {r}, loss: {train_loss}, time: {time.time() - start_time}")
             train_losses.append(train_loss)
-        return train_losses
+            self.epoch += 1
+            if self.epoch % self.test_freq == 0:
+                acc = self.test()
+                test_accs.append((self.epoch, acc))
+                if self.verbose:
+                    print(f"Epoch: {self.epoch}, loss: {train_loss}, acc: {acc}, time: {time.time() - start_time}")
+            else:
+                if self.verbose:
+                    print(f"Epoch: {self.epoch}, loss: {train_loss}, time: {time.time() - start_time}")
+            if self.epoch % self.checkpoint_freq == 0:
+                self.checkpoint(train_losses, test_accs)
+                train_losses, test_accs = [], []
+            
 
-    def test(self):
-        return self.server.test()
+    
 
 if __name__ == '__main__':
     class Args:

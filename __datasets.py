@@ -4,9 +4,8 @@ import torch
 from torch.utils.data import Dataset, Subset
 from typing import List
 
-def dataset(name, download=True, suffix=None):
-    data_dir = f"/tmp/data" if suffix is None else f"/tmp/data_{suffix}"
-    print(data_dir)
+def dataset(name, download=True):
+    data_dir = f"/tmp/data"
     if name == 'CIFAR10':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -45,8 +44,8 @@ class IIDPartitioner():
         self.num_clients = num_clients
         self.batch_size = batch_size
 
-    def split_dataset(self, dataset: Dataset) -> List[Subset]:
-        indices = torch.randperm(len(dataset)).tolist()
+    def split_dataset(self, dataset: Dataset, shuff_gen = None) -> List[Subset]:
+        indices = torch.randperm(len(dataset), generator=shuff_gen).tolist()
         n_batch = len(dataset) // self.batch_size
         split_size = n_batch // self.num_clients
         remainder = n_batch % self.num_clients

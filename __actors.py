@@ -14,7 +14,7 @@ def test_model(model, testloader, device):
 
 ### MOMENTUM SETTINGS
 class ClientGlobalMomentum():
-    def __init__(self, id, model, trainset, batch_size, loss_fn, device, attack_fn=None):
+    def __init__(self, id, model, trainset, batch_size, loss_fn, device, attack_fn=None, starting_epoch=0, shuff_gen=None):
         self.id = id
         self.device = device
         self.model = model
@@ -22,9 +22,14 @@ class ClientGlobalMomentum():
             self.dpa = attack_fn if type(attack_fn).__name__ == 'LabelFlip' else None
         else:
             self.dpa = None
-        self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True)
+        self.trainloader = torch.utils.data.DataLoader(trainset, 
+                                                       batch_size=batch_size, 
+                                                       shuffle=True, 
+                                                       generator=shuff_gen)
         self.loss_fn = loss_fn
         self.data_iter = iter(self.trainloader)
+        for _ in range(starting_epoch % len(self.trainloader)):
+            next(self.data_iter)
 
     def train(self):
         try:
@@ -64,14 +69,20 @@ class ServerGlobalMomentum():
     def test(self):
         return test_model(self.model, self.testloader, self.device)
 
-def init_actors_global_momentum(args, model, optimizer, trainsets, testset, attack_fn):
+def init_actors_global_momentum(args, model, optimizer, trainsets, testset, attack_fn, shuff_gen):
     server = ServerGlobalMomentum(model, optimizer, testset, args.batch_size, args.device)
     clients = []
     for i in range(args.num_clients):
         if i < args.num_clients - args.num_byz:
-            clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, None))
+            clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, 
+                                                attack_fn=None,
+                                                starting_epoch=args.checkpointed_epoch + 1,
+                                                shuff_gen=shuff_gen))
         else:
-            clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, attack_fn))
+            clients.append(ClientGlobalMomentum(i, model, trainsets[i], args.batch_size, nn.CrossEntropyLoss(), args.device, 
+                                                attack_fn=attack_fn,
+                                                starting_epoch=args.checkpointed_epoch + 1,
+                                                shuff_gen=shuff_gen))
     return server, clients
 
 def train_one_round_global_momentum(self):

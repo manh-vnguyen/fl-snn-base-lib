@@ -205,15 +205,15 @@ class SNN_FC(nn.Module):
         return out_voltage
 
 
-def init_model(args):
+def init_model(args, num_cls):
     if args.model == 'snn_vgg9':
         return SNN_VGG(img_size=32, 
-                    num_cls=args.num_classes,
+                    num_cls=num_cls,
                     device=args.device, 
                     **args.snn_hyperparams).to(args.device)
     
     if args.model == 'ann_vgg9':
-        return ANN_VGG(num_cls=args.num_classes).to(args.device)
+        return ANN_VGG(num_cls=num_cls).to(args.device)
 
     if args.model == 'ann_fc':
         return ANN_FC().to(args.device)
