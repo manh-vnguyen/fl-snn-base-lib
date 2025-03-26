@@ -30,7 +30,7 @@ def dataset(name, download=True):
         trainset = datasets.CIFAR100(root=data_dir, train=True, download=download, transform=transform)
         testset = datasets.CIFAR100(root=data_dir, train=False, download=download, transform=transform)
         return trainset, testset, 100
-    elif name == 'FashionMNIST':
+    elif name == 'FMNIST':
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.2859,), (0.3530,)),
