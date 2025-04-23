@@ -103,7 +103,7 @@ class FLTrainer():
             model.load_state_dict(state_dict)
 
         self.epoch = exp.checkpointed_epoch + 1
-        
+
         optimizer = torch.optim.SGD(model.parameters(), **(exp.optimizer or {}))
 
         if exp.fl_momentum == 'global':
@@ -111,6 +111,17 @@ class FLTrainer():
             self.train_one_round = train_one_round_global_momentum
         else:
             raise "Wrong FL momentum string"
+        
+        if getattr(exp, 'checkpointed_epoch_need_tested', False) \
+            and exp.checkpointed_epoch not in [i[0] for i in exp.test_accs] \
+            and exp.checkpointed_epoch in exp.test_epochs:
+            exp.test_accs.append((exp.checkpointed_epoch, self.test()))
+            try:
+                pickle.dump(exp, open(exp.exp_path, 'wb'))
+            except KeyboardInterrupt:
+                print("Checkpointing interupted, redo...")
+                pickle.dump(exp, open(exp.exp_path, 'wb'))
+                exit()
         
         self.exp = exp
     
@@ -121,11 +132,20 @@ class FLTrainer():
         self.exp.train_losses += train_losses
         self.exp.test_accs += test_accs
         self.exp.train_time += train_time
-        torch.save(self.server.model.state_dict(), self.exp.model_path)
-        if perm_checkpoint:
-            torch.save(self.server.model.state_dict(), f"{self.exp.model_path}_ep{self.epoch}")
         self.exp.checkpointed_epoch = self.epoch
-        pickle.dump(self.exp, open(self.exp.exp_path, 'wb'))
+
+        try:
+            torch.save(self.server.model.state_dict(), self.exp.model_path)
+            if perm_checkpoint:
+                torch.save(self.server.model.state_dict(), f"{self.exp.model_path}_ep{self.epoch}")
+            pickle.dump(self.exp, open(self.exp.exp_path, 'wb'))
+        except KeyboardInterrupt:
+            print("Checkpointing interupted, redo...")
+            torch.save(self.server.model.state_dict(), self.exp.model_path)
+            if perm_checkpoint:
+                torch.save(self.server.model.state_dict(), f"{self.exp.model_path}_ep{self.epoch}")
+            pickle.dump(self.exp, open(self.exp.exp_path, 'wb'))
+            exit()
     
     def run(self):
         self.start_training = time.time()
@@ -197,9 +217,10 @@ if __name__ == '__main__':
                 }
 
 
-    exp = pickle.load(open('/home/combined_everything_FL/run_data/find_eq_ann_snn/exp_10', 'rb'))
-    exp = ExpRecord('snn_vgg9')
-
+    # exp = pickle.load(open('/home/combined_everything_FL/run_data/find_eq_ann_snn/exp_10', 'rb'))
+    # exp = ExpRecord('snn_vgg9')
+    exp = pickle.load(open('/home/combined_everything_FL/run_data/r_snn_atks_defs_surrs/exp_618', 'rb'))
+    
     fl_trainer = FLTrainer(
         exp=exp,
         device='cuda:5')

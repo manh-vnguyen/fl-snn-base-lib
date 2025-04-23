@@ -143,7 +143,7 @@ class CenterClipping:
 
 
 class SignGuard():
-    def __init__(self, fl, lower_bound=0.1, upper_bound=3.0, selection_fraction=0.1, clustering="DBSCAN"):
+    def __init__(self, fl, lower_bound=0.01, upper_bound=3.0, selection_fraction=0.1, clustering="KMeans"):
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
         self.selection_fraction = selection_fraction
@@ -189,14 +189,15 @@ class SignGuard():
         elif self.clustering == "KMeans":
             sign_cluster = KMeans(n_clusters=2)
 
-        sign_cluster.fit(sign_features_np)
-        labels = torch.tensor(sign_cluster.labels_)
-        n_cluster = len(set(sign_cluster.labels_)) - (1 if -1 in sign_cluster.labels_ else 0)
+        sign_cluster.fit(sign_features)
+        labels = sign_cluster.labels_
+        n_cluster = len(set(labels)) - (1 if -1 in labels else 0)
         
         # 4. select the cluster with the majority of benign clients
-        cluster_counts = [torch.sum(labels == i).item() for i in range(n_cluster)]
-        benign_label = torch.argmax(torch.tensor(cluster_counts)).item()
-        benign_idx = torch.nonzero(labels == benign_label).flatten().tolist()
+        benign_label = np.argmax([np.sum(labels == i)
+                                 for i in range(n_cluster)])
+        benign_idx = [int(idx) for idx in np.argwhere(labels == benign_label)]
+
         return benign_idx
     
     def __call__(self, updates):
@@ -210,11 +211,15 @@ class SignGuard():
         # Find intersection of both filtering methods
         benign_idx = list(set(S1_benign_idx).intersection(S2_benign_idx))
 
+        if len(benign_idx) == 0:
+            print("Failed SignGuard, fallback to mean")
+            return updates.mean(dim=0)
+
         # 3. clip the benign gradients by median of norms
         updates_clipped_norm = torch.clamp(
             client_norms[benign_idx], min=0, max=median_norm)
         benign_clipped = (
-            updates[benign_idx] / client_norms[benign_idx].reshape(-1, 1)) * updates_clipped_norm.reshape(-1, 1)
+            updates[benign_idx] / client_norms[benign_idx].reshape(-1, 1)) * updates_clipped_norm.reshape(-1, 1)        
 
         return benign_clipped.mean(dim=0)
 

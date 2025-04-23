@@ -88,7 +88,6 @@ class SNN_VGG(nn.Module):
         self.bntt7 = nn.ModuleList([nn.BatchNorm2d(256, eps=1e-4, momentum=0.1, affine=affine_flag) for i in range(self.batch_num)])
         self.pool3 = nn.AvgPool2d(kernel_size=2)
 
-
         self.fc1 = nn.Linear((self.img_size//8)*(self.img_size//8)*256, 1024, bias=bias_flag)
         self.bntt_fc = nn.ModuleList([nn.BatchNorm1d(1024, eps=1e-4, momentum=0.1, affine=affine_flag) for i in range(self.batch_num)])
         self.fc2 = nn.Linear(1024, self.num_cls, bias=bias_flag)
