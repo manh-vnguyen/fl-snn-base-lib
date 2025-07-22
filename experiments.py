@@ -1,52 +1,59 @@
 import json
-from .trainers import FLTrainer
-import torch
-import multiprocessing as mp
-import copy
 
-class ExpBase:
+base_attr_default = {
+    'run_path': 'NON_DEFAULT_ATTRIBUTE',
+    'seed': 22032025,
+    'total_epochs': 'NON_DEFAULT_ATTRIBUTE',
+    'checkpoint_freq': 10,
+    'checkpoint_retain_last_model': False,
+    'collect_std_stats': False,
+    'perm_checkpoints': [],
+    'test_epochs': [],
+    'test_freq': None,
+    'verbose': True,
+    'batch_size': 32,
+    'model': 'NON_DEFAULT_ATTRIBUTE',
+    'dataset': 'NON_DEFAULT_ATTRIBUTE',
+    'optimizer': 'NON_DEFAULT_ATTRIBUTE',
+    'exp_id': 'NON_DEFAULT_ATTRIBUTE',
+    'tags': None,
+}
+
+fl_attr_default = {
+    'fl_momentum': 'NON_DEFAULT_ATTRIBUTE',
+    'num_clients': 'NON_DEFAULT_ATTRIBUTE',
+    'num_byz': 0,
+    'attack': {'type': None, 'params': {}},
+    'aggregator': {'type': 'Mean', 'params': {}},
+}
+
+class ExpSolo():
     def __init__(self, 
-                 exp_path=None,
-                 model=None,
-                 optimizer=None,
-                 exp_id=None,
-                 checkpoint_freq=10,
-                 run_path=None,
-                 dataset=None,
-                 total_epochs=500,
-                 test_epochs=None,
+                 **kwargs
                  ):
-        if exp_path != None:
-            self.from_json_file(exp_path)
+        if 'exp_path' in kwargs.keys():
+            self.from_json_file(kwargs['exp_path'])
+            return
+        elif 'exp_dict' in kwargs.keys():
+            exp_dict = kwargs['exp_dict']
         else:
-            self.run_path = run_path
-            self.seed = 22032025
-            self.total_epochs = total_epochs
-            self.checkpoint_freq = checkpoint_freq
-            self.checkpoint_retain_last_model = False
-            self.collect_std_stats = False
-            self.perm_checkpoints = []
-            self.test_epochs = test_epochs
-            self.verbose = True
-            
-            self.batch_size = 32
-
-            self.model=model
-            self.dataset=dataset
-            self.optimizer={
-                'lr': 0.02,
-                'momentum': 0.95,
-                'weight_decay': 0.0005,
-            } if optimizer is None else optimizer
-
-            self.exp_id = exp_id
+            exp_dict = kwargs
+        self.from_dict(exp_dict)
 
     def best_acc(self):
         pass
 
     def from_dict(self, exp_dict):
-        for key, value in exp_dict.items():
-            setattr(self, key, value)
+        for key in base_attr_default.keys():
+            if key in exp_dict.keys():
+                setattr(self, key, exp_dict[key])
+            elif base_attr_default[key] !=  'NON_DEFAULT_ATTRIBUTE':
+                setattr(self, key, base_attr_default[key])
+            else:
+                raise Exception(f"Attribute problems: {key} is non-default")
+        
+        for key in exp_dict.keys():
+            setattr(self, key, exp_dict[key])
 
     def from_json_file(self, exp_path):
         # Load the JSON data from file
@@ -87,112 +94,19 @@ class ExpBase:
         return json.dumps({attr: getattr(self, attr) for attr in dir(self) 
                 if not attr.startswith('__') and not callable(getattr(self, attr))}, indent=4)
 
-class ExpSolo(ExpBase):
-    pass
-
-class ExpFed(ExpBase):
-    def __init__(self, 
-                 exp_path=None,
-                 model=None,
-                 optimizer = None,
-                 exp_id=None,
-                 checkpoint_freq=10,
-                 dataset=None,
-                 run_path=None,
-                 total_epochs=500,
-                 test_epochs=None,
-                 fl_momentum=None,
-                 num_clients=None,
-                 num_byz=0,
-                 attack=None,
-                 aggregator=None,
-                 ):
-        if exp_path != None:
-            self.from_json_file(exp_path)
-        else:
-            super().__init__(
-                 exp_path=exp_path,
-                 model=model,
-                 optimizer=optimizer,
-                 exp_id=exp_id,
-                 checkpoint_freq=checkpoint_freq,
-                 dataset=dataset,
-                 run_path=run_path,
-                 total_epochs=total_epochs,
-                 test_epochs=test_epochs,
-                 )
+class ExpFed(ExpSolo):
+    def from_dict(self, exp_dict):
+        super().from_dict(exp_dict)
+        for key in fl_attr_default.keys():
+            if key in exp_dict.keys():
+                setattr(self, key, exp_dict[key])
+            elif fl_attr_default[key] != 'NON_DEFAULT_ATTRIBUTE':
+                setattr(self, key, fl_attr_default[key])
+            else:
+                raise f"Attribute problems: {key} is non-default"
             
-            self.fl_momentum=fl_momentum
-            self.num_clients = num_clients
-            self.num_byz = num_byz
-            self.attack={'type': None, 'params': {}} if attack is None else attack
-            self.aggregator={'type': 'Mean', 'params': {}} if aggregator is None else aggregator
-    
     def best_acc(self):
         if len(self.test_accs) == 0:
             return None
         return max([item[1] for item in self.test_accs])
     
-
-class ExperimentRunner:
-    def __init__(self, gpu_quotas=None, run_func='run_experiment'):
-        self.GPU_QUOTAS = gpu_quotas or {6: 3, 7: 3}
-        self.run_func = getattr(self, run_func, None)
-
-    def run_experiment_from_path(self, exp_path, gpu_id):
-        exp = ExpFed(exp_path=exp_path)
-        return self.run_experiment(exp, gpu_id)
-
-    def run_experiment(self, exp, gpu_id):
-        trainer = FLTrainer(exp=exp, device=f'cuda:{gpu_id}')
-        trainer.run()
-        return trainer.exp.best_acc()
-
-    def get_available_gpu(self, gpu_remained):
-        available_gpus = [gpu_id for gpu_id in gpu_remained.keys() 
-                            if gpu_remained[gpu_id] > 0]
-        if not available_gpus:
-            return None
-        
-        selected_gpu = max(available_gpus, key=lambda gpu_id: gpu_remained[gpu_id])
-        gpu_remained[selected_gpu] -= 1
-
-        return selected_gpu
-
-    def release_gpu(self, gpu_id, gpu_remained):
-        assert gpu_remained[gpu_id] < self.GPU_QUOTAS[gpu_id]
-        gpu_remained[gpu_id] += 1
-        torch.cuda.empty_cache()
-
-    def pair_experiment_with_gpu(self, config):
-        exp, gpu_remained = config
-        with lock:
-            gpu_id = self.get_available_gpu(gpu_remained)
-        result = self.run_func(exp, gpu_id)
-        with lock:
-            self.release_gpu(gpu_id, gpu_remained)
-
-        return result
-
-    def init_pool_processes(self, the_lock):
-        global lock
-        lock = the_lock
-
-    def run_parallel_processes(self, all_experiments):
-        mp.set_start_method('spawn', force=True)
-        num_processes = min(sum([self.GPU_QUOTAS[n] for n in self.GPU_QUOTAS.keys()]), len(all_experiments))
-        print(f"Number of experiments: {len(all_experiments)}, {self.GPU_QUOTAS=}, "
-              f"Starting {num_processes} processes")
-        
-        with mp.Manager() as manager:
-            lock = mp.Lock()
-            gpu_usage = manager.dict(copy.deepcopy(self.GPU_QUOTAS))
-            exp_gpu_usages = [(exp, gpu_usage) for exp in all_experiments]
-            with mp.Pool(
-                processes=num_processes,
-                initializer=self.init_pool_processes, initargs=(lock,)
-            ) as pool:
-                pool.map(self.pair_experiment_with_gpu, exp_gpu_usages)
-
-
-__all__ = ['ExpSolo', 'ExpFed', 'ExperimentRunner']

@@ -56,7 +56,7 @@ class Server():
         return test_model(self.model, self.testloader, self.device)
 
 
-class GlobalMomentumTrainer():
+class CentralizedMomentumTrainer():
 
     def init_actors(self, trainsets, testset, model, optimizer):
         loss_fn = nn.CrossEntropyLoss()

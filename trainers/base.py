@@ -3,11 +3,7 @@ import time
 import random
 import os
 
-from .global_momentum import GlobalMomentumTrainer
-from .local_momentum import LocalMomentumTrainer
-from .. import get_dataset, IIDPartitioner, init_model
-from ..defenses import get_defense_class
-from ..attacks import get_attack_class
+from .. import init_model
 
 class BaseTrainer():
     def get_checkpointed_state_dict(self):
@@ -19,9 +15,13 @@ class BaseTrainer():
     def init_model(self):
         return init_model(self.exp, self.device)
 
-    
     def init_optimizer(self, model):
-        return torch.optim.SGD(model.parameters(), **(self.exp.optimizer or {}))
+        return getattr(torch.optim, self.exp.optimizer['type'])(model.parameters(), **self.exp.optimizer['params'])
+    
+    def init_lr_scheduler(self, optimizer):
+        if self.exp.lr_scheduler is None:
+            return None
+        return getattr(torch.optim.lr_scheduler, self.exp.lr_scheduler['type'])(optimizer, **self.exp.lr_scheduler['params'])
     
     def train_one_round(self):
         pass
@@ -72,7 +72,8 @@ class BaseTrainer():
                 if self.verbose:
                     print(f"Epoch: {self.epoch}, loss: {train_loss}, time: {time.time() - start_time}")
             if (self.checkpoint_freq != None and self.epoch % self.checkpoint_freq == 0) \
-                or (self.perm_checkpoints != None and self.epoch in self.perm_checkpoints):
+                or (self.perm_checkpoints != None and self.epoch in self.perm_checkpoints) \
+                or self.epoch == self.total_epochs:
                 self.checkpoint(train_losses, test_accs, time.time() - self.start_training, (self.perm_checkpoints != None and self.epoch in self.perm_checkpoints))
                 train_losses, test_accs = [], []
                 self.start_training = time.time()

@@ -25,12 +25,11 @@ class SoloTrainer(BaseTrainer):
         if getattr(self.exp, 'model_path', None) is None:
             self.exp.model_path = f'{self.exp.run_path}/s_model_{self.exp.exp_id}'
         if self.exp.checkpoint_freq != None and getattr(self.exp, 'exp_path', None) is None:
-            self.exp.exp_path = f'{self.exp.run_path}/s_exp_{self.exp.exp_id}'
+            self.exp.exp_path = f'{self.exp.run_path}/s_exp_{self.exp.exp_id}.json'
             assert not os.path.exists(self.exp.exp_path), "Experiment path already exists, give new path or keep running with exp_path"
         if getattr(self.exp, 'seed', None) is None:
             self.exp.seed = random.randint(0, 1e9)
 
-        
         self.init_dataloader()
 
         self.model = self.init_model()
@@ -45,7 +44,7 @@ class SoloTrainer(BaseTrainer):
         self.epoch = self.exp.checkpointed_epoch + 1
 
         self.optimizer = self.init_optimizer(self.model)
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.lr_scheduler = self.init_lr_scheduler(self.optimizer)
 
     def get_model_state_dict(self):
         return self.model.state_dict()
@@ -61,9 +60,8 @@ class SoloTrainer(BaseTrainer):
         for images, labels in train_iter:
             images, labels = images.to(self.device), labels.to(self.device)
             output = self.model(images)
+            loss = torch.nn.functional.cross_entropy(output, labels)
             self.optimizer.zero_grad()
-            output = self.model(images)
-            loss = self.loss_fn(output, labels)
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()

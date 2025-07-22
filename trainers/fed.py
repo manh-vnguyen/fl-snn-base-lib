@@ -3,8 +3,8 @@ import time
 import random
 import os
 
-from .global_momentum import GlobalMomentumTrainer
-from .local_momentum import LocalMomentumTrainer
+from .centralized_momentum import CentralizedMomentumTrainer
+from .distributed_momentum import DistributedMomentumTrainer
 from .base import BaseTrainer
 from .. import get_dataset, IIDPartitioner, init_model
 from ..defenses import get_defense_class
@@ -12,32 +12,29 @@ from ..attacks import get_attack_class
 
 
 ### Federated Learning
-class FLTrainer(BaseTrainer, GlobalMomentumTrainer, LocalMomentumTrainer):
+class FLTrainer(BaseTrainer, CentralizedMomentumTrainer, DistributedMomentumTrainer):
     def __init__(self, exp, device):
         self.exp = exp
         self.verbose = self.exp.verbose
-        self.num_clients = self.exp.num_clients
-        self.num_byz = self.exp.num_byz
         self.total_epochs = self.exp.total_epochs
         self.test_epochs = getattr(self.exp, 'test_epochs', None)
         self.test_freq = getattr(self.exp, 'test_freq', None)
         self.checkpoint_freq = getattr(self.exp, 'checkpoint_freq', None)
         self.perm_checkpoints = getattr(self.exp, 'perm_checkpoints', None)
-        self.fl_momentum = self.exp.fl_momentum
         self.device = device
 
         if self.exp.run_path != None and not os.path.exists(self.exp.run_path):
             os.makedirs(self.exp.run_path)
 
         if getattr(self.exp, 'model_path', None) is None:
-            self.exp.model_path = f'{self.exp.run_path}/f_model_{self.exp.exp_id}'
+            self.exp.model_path = f'{self.exp.run_path}/f_model_{self.exp.exp_id}.pth'
         if self.exp.checkpoint_freq != None and getattr(self.exp, 'exp_path', None) is None:
-            self.exp.exp_path = f'{self.exp.run_path}/f_exp_{self.exp.exp_id}'
+            self.exp.exp_path = f'{self.exp.run_path}/f_exp_{self.exp.exp_id}.json'
             assert not os.path.exists(self.exp.exp_path), "Experiment path already exists, give new path or keep running with exp_path"
         if getattr(self.exp, 'seed', None) is None:
             self.exp.seed = random.randint(0, 1e9)
 
-        
+
         self.attack_fn = self.init_attack()
         self.n_clients_to_train = self.num_clients if self.exp.attack['type'] != None and self.exp.attack['type'] in ['SignFlip', 'LabelFlip'] else self.num_clients - self.num_byz
 
@@ -56,6 +53,11 @@ class FLTrainer(BaseTrainer, GlobalMomentumTrainer, LocalMomentumTrainer):
         self.epoch = self.exp.checkpointed_epoch + 1
 
         optimizer = self.init_optimizer(model)
+        self.lr_scheduler = self.init_lr_scheduler(optimizer)
+
+        self.fl_momentum = self.exp.fl_momentum
+        self.num_clients = self.exp.num_clients
+        self.num_byz = self.exp.num_byz
         trainsets, testset = self.init_dataset()
         self.server, self.clients = self.init_actors(trainsets, testset, model, optimizer)
 
@@ -71,8 +73,6 @@ class FLTrainer(BaseTrainer, GlobalMomentumTrainer, LocalMomentumTrainer):
                 print("Checkpointing interupted, redo...")
                 self.exp.save_json()
                 exit()
-
-
     
     
     def get_model_state_dict(self):
@@ -96,21 +96,22 @@ class FLTrainer(BaseTrainer, GlobalMomentumTrainer, LocalMomentumTrainer):
         defense_class = get_defense_class(self.exp.aggregator['type'])
         return defense_class(self, **self.exp.aggregator['params'])
 
-    def simulate_attack(self, updates):
-        if type(self.attack_fn).__name__ == 'LabelFlip':
-            return updates
+    def simulate_attack(self):
+        if self.attack_fn is None:
+            pass
+        elif type(self.attack_fn).__name__ == 'LabelFlip':
+            pass
         elif type(self.attack_fn).__name__ == 'SignFlip':
             for i in range(self.num_clients - self.num_byz, self.num_clients):
-                updates[i] *= -1
+                self.updates[i] *= -1
         elif type(self.attack_fn).__name__ == 'GaussRandom':
-            m_update = self.attack_fn(updates[0].shape)
-            updates += [m_update for _ in range(self.num_byz)]
+            m_update = self.attack_fn(self.updates[0].shape)
+            self.updates += [m_update for _ in range(self.num_byz)]
         else:
-            m_update = self.attack_fn(updates)
-            updates += [m_update for _ in range(self.num_byz)]
-        return updates
+            m_update = self.attack_fn(self.updates)
+            self.updates += [m_update for _ in range(self.num_byz)]
 
-    def collect_std_stats(self, updates):
+    def collect_std_stats(self):
         # Create the std_stats attribute if non-existence
         if getattr(self.exp, 'std_stats', None) is None:
             self.exp.std_stats = { 
@@ -119,15 +120,15 @@ class FLTrainer(BaseTrainer, GlobalMomentumTrainer, LocalMomentumTrainer):
                     'non_top_k_eps': 0,
                     'count': 0
                 } for kappa in [0.01, 0.05, 0.09, 0.1, 0.5, 0.9]}
-        updates = torch.stack(updates)
+        vecs = torch.stack(self.updates)
 
-        mean = updates.mean(dim=0).abs()
-        eps = updates.std(dim=0).abs()/mean
+        mean = vecs.mean(dim=0).abs()
+        eps = vecs.std(dim=0).abs()/mean
 
         # Loop through different sparsity levels
         for kappa in [0.01, 0.05, 0.09, 0.1, 0.5, 0.9]:
             # Calculate how many parameters to keep based on kappa
-            K = kappa * len(updates[0])
+            K = kappa * len(vecs[0])
             
             # Find indices of the top K parameters by mean magnitude
             top_K_indices = torch.topk(mean, k=int(K)).indices
@@ -147,18 +148,22 @@ class FLTrainer(BaseTrainer, GlobalMomentumTrainer, LocalMomentumTrainer):
                 self.exp.std_stats[kappa]['top_k_eps'] += top_k_values.mean().item()
                 self.exp.std_stats[kappa]['non_top_k_eps'] += non_top_k_values.mean().item()
                 self.exp.std_stats[kappa]['count'] += 1
+
+    def after_attack_hook(self):
+        if self.exp.collect_std_stats:
+            self.collect_std_stats()
             
     def init_actors(self, *args, **kwargs):
-        if self.fl_momentum == 'local':
-            return LocalMomentumTrainer.init_actors(self, *args, **kwargs)
-        elif self.fl_momentum == 'global':
-            return GlobalMomentumTrainer.init_actors(self, *args, **kwargs)
+        if self.fl_momentum in ['local', 'distributed']:
+            return DistributedMomentumTrainer.init_actors(self, *args, **kwargs)
+        elif self.fl_momentum in ['global', 'centralized']:
+            return CentralizedMomentumTrainer.init_actors(self, *args, **kwargs)
     
     def train_one_round(self):
-        if self.fl_momentum == 'local':
-            return LocalMomentumTrainer.train_one_round(self)
-        elif self.fl_momentum == 'global':
-            return GlobalMomentumTrainer.train_one_round(self)
+        if self.fl_momentum in ['local', 'distributed']:
+            return DistributedMomentumTrainer.train_one_round(self)
+        elif self.fl_momentum in ['global', 'centralized']:
+            return CentralizedMomentumTrainer.train_one_round(self)
     
     def test(self):
         return self.server.test()

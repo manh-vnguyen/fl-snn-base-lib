@@ -77,7 +77,7 @@ class Server():
         return test_model(self.model, self.testloader, self.device)
     
 
-class LocalMomentumTrainer():
+class DistributedMomentumTrainer():
     def init_actors(self, trainsets, testset, model, optimizer):
         loss_fn = nn.CrossEntropyLoss()
         server = Server(model, testset, self.exp.batch_size, self.device)
@@ -89,9 +89,12 @@ class LocalMomentumTrainer():
         
         return server, clients
     
+    def after_attack_hook(self):
+        pass
+    
     def train_one_round(self):
         train_loss = 0
-        updates = []
+        self.updates = []
         server_params = self.server.get_state_dict()
         for i in range(self.n_clients_to_train):
             self.clients[i].load_state_dict(server_params, 
@@ -99,19 +102,15 @@ class LocalMomentumTrainer():
             loss = self.clients[i].train()
             if i < self.num_clients - self.num_byz:
                 train_loss += loss
-            updates.append(self.clients[i].get_state_dict_change(server_params))
+            self.updates.append(self.clients[i].get_state_dict_change(server_params))
 
         train_loss /= (self.num_clients - self.num_byz)
 
-        # print(len(updates))
         if self.attack_fn != None:
-            updates = self.simulate_attack(updates)
-        # print(len(updates))
-        if self.exp.collect_std_stats:
-            self.collect_std_stats(updates)
+            self.simulate_attack()
 
-        # print(len(updates))
+        self.after_attack_hook()
 
-        server_params += self.agg_fn(updates)
+        server_params += self.agg_fn(self.updates)
         self.server.load_state_dict(server_params)
         return train_loss
