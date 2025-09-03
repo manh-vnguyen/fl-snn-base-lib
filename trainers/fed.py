@@ -1,12 +1,9 @@
 import torch
-import time
-import random
-import os
 
 from .centralized_momentum import CentralizedMomentumTrainer
 from .distributed_momentum import DistributedMomentumTrainer
 from .base import BaseTrainer
-from .. import get_dataset, IIDPartitioner, init_model
+from .. import IIDPartitioner
 from ..defenses import get_defense_class
 from ..attacks import get_attack_class
 
@@ -14,54 +11,19 @@ from ..attacks import get_attack_class
 ### Federated Learning
 class FLTrainer(BaseTrainer, CentralizedMomentumTrainer, DistributedMomentumTrainer):
     def __init__(self, exp, device):
-        self.exp = exp
-        self.verbose = self.exp.verbose
-        self.total_epochs = self.exp.total_epochs
-        self.test_epochs = getattr(self.exp, 'test_epochs', None)
-        self.test_freq = getattr(self.exp, 'test_freq', None)
-        self.checkpoint_freq = getattr(self.exp, 'checkpoint_freq', None)
-        self.perm_checkpoints = getattr(self.exp, 'perm_checkpoints', None)
-        self.device = device
+        super().__init__(exp, device)
 
-        if self.exp.run_path != None and not os.path.exists(self.exp.run_path):
-            os.makedirs(self.exp.run_path)
-
-        if getattr(self.exp, 'model_path', None) is None:
-            self.exp.model_path = f'{self.exp.run_path}/f_model_{self.exp.exp_id}.pth'
-        if self.exp.checkpoint_freq != None and getattr(self.exp, 'exp_path', None) is None:
-            self.exp.exp_path = f'{self.exp.run_path}/f_exp_{self.exp.exp_id}.json'
-            assert not os.path.exists(self.exp.exp_path), "Experiment path already exists, give new path or keep running with exp_path"
-        if getattr(self.exp, 'seed', None) is None:
-            self.exp.seed = random.randint(0, 1e9)
-
+        self.fl_momentum = self.exp.fl_momentum
+        self.num_clients = self.exp.num_clients
+        self.num_byz = self.exp.num_byz
 
         self.attack_fn = self.init_attack()
         self.n_clients_to_train = self.num_clients if self.exp.attack['type'] != None and self.exp.attack['type'] in ['SignFlip', 'LabelFlip'] else self.num_clients - self.num_byz
 
         self.agg_fn = self.init_aggregator()
-
-        model = self.init_model()
-
-        if getattr(self.exp, 'checkpointed_epoch', None) is None:
-            self.exp.checkpointed_epoch = 0
-            self.exp.train_losses = []
-            self.exp.test_accs = []
-            self.exp.train_time = 0
-        else:
-            state_dict = self.get_checkpointed_state_dict()
-            model.load_state_dict(state_dict)
-        self.epoch = self.exp.checkpointed_epoch + 1
-
-        optimizer = self.init_optimizer(model)
-        self.lr_scheduler = self.init_lr_scheduler(optimizer)
-
-        self.fl_momentum = self.exp.fl_momentum
-        self.num_clients = self.exp.num_clients
-        self.num_byz = self.exp.num_byz
-        trainsets, testset = self.init_dataset()
-        self.server, self.clients = self.init_actors(trainsets, testset, model, optimizer)
-
         
+        trainsets, testset = self.init_dataset()
+        self.server, self.clients = self.init_actors(trainsets, testset, self.model, self.optimizer)
         
         if getattr(self.exp, 'checkpointed_epoch_need_tested', False) \
             and self.exp.checkpointed_epoch not in [i[0] for i in self.exp.test_accs] \
@@ -79,8 +41,8 @@ class FLTrainer(BaseTrainer, CentralizedMomentumTrainer, DistributedMomentumTrai
         return self.server.model.state_dict()
     
     def init_dataset(self):
+        trainset, testset, _, _ = super().init_dataset()
         shuff_gen = torch.Generator().manual_seed(self.exp.seed)
-        trainset, testset, _, _ = get_dataset(self.exp.dataset)
         trainsets = IIDPartitioner(self.exp.num_clients, self.exp.batch_size).split_dataset(trainset, shuff_gen=shuff_gen)
         return trainsets, testset
     
@@ -111,7 +73,7 @@ class FLTrainer(BaseTrainer, CentralizedMomentumTrainer, DistributedMomentumTrai
             m_update = self.attack_fn(self.updates)
             self.updates += [m_update for _ in range(self.num_byz)]
 
-    def collect_std_stats(self):
+    def collect_std_stats(self, updates):
         # Create the std_stats attribute if non-existence
         if getattr(self.exp, 'std_stats', None) is None:
             self.exp.std_stats = { 
@@ -120,7 +82,7 @@ class FLTrainer(BaseTrainer, CentralizedMomentumTrainer, DistributedMomentumTrai
                     'non_top_k_eps': 0,
                     'count': 0
                 } for kappa in [0.01, 0.05, 0.09, 0.1, 0.5, 0.9]}
-        vecs = torch.stack(self.updates)
+        vecs = torch.stack(updates)
 
         mean = vecs.mean(dim=0).abs()
         eps = vecs.std(dim=0).abs()/mean
@@ -151,7 +113,7 @@ class FLTrainer(BaseTrainer, CentralizedMomentumTrainer, DistributedMomentumTrai
 
     def after_attack_hook(self):
         if self.exp.collect_std_stats:
-            self.collect_std_stats()
+            self.collect_std_stats(self.updates)
             
     def init_actors(self, *args, **kwargs):
         if self.fl_momentum in ['local', 'distributed']:

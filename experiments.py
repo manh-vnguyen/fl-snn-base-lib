@@ -15,6 +15,7 @@ base_attr_default = {
     'model': 'NON_DEFAULT_ATTRIBUTE',
     'dataset': 'NON_DEFAULT_ATTRIBUTE',
     'optimizer': 'NON_DEFAULT_ATTRIBUTE',
+    'lr_scheduler': None,
     'exp_id': 'NON_DEFAULT_ATTRIBUTE',
     'tags': None,
 }

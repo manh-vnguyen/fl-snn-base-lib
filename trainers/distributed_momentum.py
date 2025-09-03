@@ -89,9 +89,6 @@ class DistributedMomentumTrainer():
         
         return server, clients
     
-    def after_attack_hook(self):
-        pass
-    
     def train_one_round(self):
         train_loss = 0
         self.updates = []
@@ -105,9 +102,8 @@ class DistributedMomentumTrainer():
             self.updates.append(self.clients[i].get_state_dict_change(server_params))
 
         train_loss /= (self.num_clients - self.num_byz)
-
-        if self.attack_fn != None:
-            self.simulate_attack()
+        
+        self.simulate_attack()
 
         self.after_attack_hook()
 

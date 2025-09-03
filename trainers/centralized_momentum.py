@@ -71,21 +71,19 @@ class CentralizedMomentumTrainer():
     
     def train_one_round(self):
         train_loss = 0
-        updates = []
+        self.updates = []
         for i in range(self.n_clients_to_train):
             loss = self.clients[i].train()
             if i < self.num_clients - self.num_byz:
                 train_loss += loss
-            updates.append(self.clients[i].get_model_grad())
+            self.updates.append(self.clients[i].get_model_grad())
         train_loss /= (self.num_clients - self.num_byz)
 
-        if self.attack_fn != None:
-            updates = self.simulate_attack(updates)
+        self.simulate_attack()
 
-        if self.exp.collect_std_stats:
-            self.collect_std_stats(updates)
+        self.after_attack_hook()
 
-        agg_grad = self.agg_fn(updates)
+        agg_grad = self.agg_fn(self.updates)
         self.server.load_model_grad(agg_grad)
         self.server.step()
         return train_loss

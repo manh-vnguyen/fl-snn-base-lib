@@ -11,8 +11,8 @@ class IPM():
 class LIE():
     def __init__(self, fl, z_max = 1.5):
         self.z_max = z_max
-    def __call__(self, b_grads):
-        b_grads = torch.stack(b_grads)
+    def __call__(self, updates):
+        b_grads = torch.stack(updates)
         mu = b_grads.mean(dim=0)
         std = b_grads.std(dim=0)
         return mu - std * self.z_max

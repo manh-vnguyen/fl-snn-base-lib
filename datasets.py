@@ -4,14 +4,14 @@ import torch
 from torch.utils.data import Dataset, Subset
 from typing import List
 
-def get_dataset(name, z_norm = False, download=False):
+def get_dataset(name, z_norm, download=False):
     data_dir = f"/tmp/data"
     transform_list = [transforms.ToTensor()]
     if z_norm:
         if name == 'CIFAR10':
             transform_list.append(transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)))
         elif name == 'MNIST':
-            transform_list.append(transforms.Normalize(transforms.Normalize((0.1307,), (0.3081,))))
+            transform_list.append(transforms.Normalize((0.1307,), (0.3081,)))
         elif name == 'CIFAR100':
             transform_list.append(transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762)))
         elif name == 'FMNIST':
@@ -26,17 +26,17 @@ def get_dataset(name, z_norm = False, download=False):
         trainset = datasets.MNIST(root=data_dir, train=True, download=download, transform=transform)
         testset = datasets.MNIST(root=data_dir, train=False, download=download, transform=transform)
         num_classes = 10
-        rescale_fac = None
+        rescale_fac = 2.8215
     elif name == 'CIFAR100':
         trainset = datasets.CIFAR100(root=data_dir, train=True, download=download, transform=transform)
         testset = datasets.CIFAR100(root=data_dir, train=False, download=download, transform=transform)
         num_classes = 100
-        rescale_fac = None
+        rescale_fac = 2.0243
     elif name == 'FMNIST':
         trainset = datasets.FashionMNIST(root=data_dir, train=True, download=download, transform=transform)
         testset = datasets.FashionMNIST(root=data_dir, train=False, download=download, transform=transform)
         num_classes = 10
-        rescale_fac = None
+        rescale_fac = 2.0229
     return trainset, testset, num_classes, rescale_fac
 
 class IIDPartitioner():
